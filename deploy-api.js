@@ -34,6 +34,9 @@ const REGIONS = {
   AZURE_EU: { auth: 'azure-eu-app.contentstack.com',   launch: 'azure-eu-launch-api.contentstack.com' },
   GCP_NA:   { auth: 'gcp-na-app.contentstack.com',     launch: 'gcp-na-launch-api.contentstack.com' },
   GCP_EU:   { auth: 'gcp-eu-app.contentstack.com',     launch: 'gcp-eu-launch-api.contentstack.com' },
+  // Contentstack-internal non-production stack, for testing this pipeline
+  // before pointing it at a customer project.
+  DEV11:    { auth: 'dev11-app.csnonprod.com',         launch: 'dev-launch-api.csnonprod.com' },
 };
 
 // Files and folders uploaded to Launch. Launch runs the build itself, so this
@@ -64,8 +67,40 @@ function env(name) {
   return (process.env[name] || '').trim();
 }
 
+const VARIABLE_NAMES = {
+  clientId: 'CONTENTSTACK_CLIENT_ID',
+  clientSecret: 'CONTENTSTACK_CLIENT_SECRET',
+  region: 'CONTENTSTACK_REGION',
+  projectUid: 'PROJECT_UID',
+  environmentUid: 'ENVIRONMENT_UID',
+};
+
+const REGION_HINT = `Use one of: ${Object.keys(REGIONS).join(', ')}`
+  + ' -- or set CONTENTSTACK_AUTH_HOST and CONTENTSTACK_LAUNCH_API_HOST for a stack that is not listed.';
+
+// Accepts a bare hostname or a full URL, and keeps only the hostname.
+function hostOnly(value) {
+  return value.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
+}
+
+function resolveHosts(region) {
+  const auth = hostOnly(env('CONTENTSTACK_AUTH_HOST'));
+  const launch = hostOnly(env('CONTENTSTACK_LAUNCH_API_HOST'));
+
+  // Explicit hosts win, so an unlisted stack needs no code change.
+  if (auth && launch) return { auth, launch };
+  if (auth || launch) {
+    fail('Set both CONTENTSTACK_AUTH_HOST and CONTENTSTACK_LAUNCH_API_HOST, or neither.');
+  }
+  if (!REGIONS[region]) {
+    fail(`Unknown CONTENTSTACK_REGION "${region}".`, REGION_HINT);
+  }
+  return REGIONS[region];
+}
+
 function loadConfig() {
   const region = env('CONTENTSTACK_REGION').toUpperCase();
+  const usingHostOverrides = Boolean(env('CONTENTSTACK_AUTH_HOST') || env('CONTENTSTACK_LAUNCH_API_HOST'));
   const include = (env('LAUNCH_INCLUDE') || DEFAULT_INCLUDE.join(','))
     .split(',')
     .map(entry => entry.trim())
@@ -75,7 +110,6 @@ function loadConfig() {
     clientId: env('CONTENTSTACK_CLIENT_ID'),
     clientSecret: env('CONTENTSTACK_CLIENT_SECRET'),
     region,
-    hosts: REGIONS[region],
     projectUid: env('PROJECT_UID'),
     environmentUid: env('ENVIRONMENT_UID'),
     include,
@@ -83,24 +117,18 @@ function loadConfig() {
     timeoutMs: (Number(env('DEPLOYMENT_TIMEOUT_SECONDS')) || 900) * 1000,
   };
 
-  const missing = ['clientId', 'clientSecret', 'region', 'projectUid', 'environmentUid']
-    .filter(key => !config[key])
-    .map(key => ({
-      clientId: 'CONTENTSTACK_CLIENT_ID',
-      clientSecret: 'CONTENTSTACK_CLIENT_SECRET',
-      region: 'CONTENTSTACK_REGION',
-      projectUid: 'PROJECT_UID',
-      environmentUid: 'ENVIRONMENT_UID',
-    }[key]));
+  const required = ['clientId', 'clientSecret', 'projectUid', 'environmentUid'];
+  if (!usingHostOverrides) required.push('region');
 
+  const missing = required.filter(key => !config[key]).map(key => VARIABLE_NAMES[key]);
   if (missing.length) {
-    fail(`Missing required variable(s): ${missing.join(', ')}`);
+    fail(
+      `Missing required variable(s): ${missing.join(', ')}`,
+      missing.includes('CONTENTSTACK_REGION') ? REGION_HINT : undefined
+    );
   }
 
-  if (!config.hosts) {
-    fail(`Unknown CONTENTSTACK_REGION "${region}". Use one of: ${Object.keys(REGIONS).join(', ')}`);
-  }
-
+  config.hosts = resolveHosts(region);
   return config;
 }
 
@@ -386,7 +414,7 @@ async function main() {
   const branch = env('BITBUCKET_BRANCH');
 
   console.log('Redeploying to Contentstack Launch');
-  console.log(`  region      : ${config.region}`);
+  console.log(`  region      : ${config.region || 'custom'} (${config.hosts.launch})`);
   console.log(`  project     : ${config.projectUid}`);
   console.log(`  environment : ${config.environmentUid}`);
   if (branch || commit) {

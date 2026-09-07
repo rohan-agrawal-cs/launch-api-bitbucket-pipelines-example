@@ -27,12 +27,16 @@ and [`launch-api-gitlab-ci-example`](https://github.com/contentstack-launch-exam
 |----------|-------------|
 | `CONTENTSTACK_CLIENT_ID` | M2M / OAuth app ID |
 | `CONTENTSTACK_CLIENT_SECRET` | M2M / OAuth app secret |
-| `CONTENTSTACK_REGION` | `AWS_NA`, `AWS_EU`, `AWS_AU`, `AZURE_NA`, `AZURE_EU`, `GCP_NA`, `GCP_EU` |
+| `CONTENTSTACK_REGION` | `AWS_NA`, `AWS_EU`, `AWS_AU`, `AZURE_NA`, `AZURE_EU`, `GCP_NA`, `GCP_EU`, `DEV11` |
 | `PROJECT_UID` | Launch project UID |
 | `ENVIRONMENT_UID` | Launch environment UID to redeploy |
 
 Optional: `LAUNCH_INCLUDE`, `WAIT_FOR_DEPLOYMENT`, `DEPLOYMENT_TIMEOUT_SECONDS` — see
 [`.env.example`](.env.example).
+
+To target a stack the region list does not cover, set `CONTENTSTACK_AUTH_HOST` and
+`CONTENTSTACK_LAUNCH_API_HOST` (hostnames, or full URLs — they are trimmed) instead of
+`CONTENTSTACK_REGION`. Explicit hosts always win over the region lookup.
 
 ---
 
