@@ -39,20 +39,30 @@ const REGIONS = {
   DEV11:    { auth: 'dev11-app.csnonprod.com',         launch: 'dev-launch-api.csnonprod.com' },
 };
 
-// Files and folders uploaded to Launch. Launch runs the build itself, so this
-// is source -- not build output -- and node_modules is never included.
-// Override per project with LAUNCH_INCLUDE="package.json,src,public".
-const DEFAULT_INCLUDE = [
-  'package.json',
-  'package-lock.json',
-  'next.config.js',
-  'pages',
-  'public',
-  'app',
-  'functions',
+// By default the whole working directory is uploaded, minus the entries below.
+// Launch runs the build itself, so this is source -- dist/build/out are left in
+// because a project may legitimately deploy committed output, but dependency
+// trees, VCS metadata, framework caches, and secrets never are.
+//
+//   LAUNCH_EXCLUDE="fixtures,docs"          -- skip more (matched on name)
+//   LAUNCH_INCLUDE="package.json,src"      -- upload only these instead
+const DEFAULT_EXCLUDE = [
+  '.git', '.svn', '.hg',
+  'node_modules',
+  '.next', '.nuxt', '.svelte-kit', '.output', '.turbo', '.cache', 'coverage',
+  '.DS_Store', 'Thumbs.db',
+  'deployment.zip',
 ];
 
-const NEVER_INCLUDE = new Set(['node_modules', '.git', '.next', '.DS_Store', 'deployment.zip']);
+// .env holds secrets and Launch takes its variables from the environment
+// config, so never ship one -- but .env.example and friends are just docs.
+function isSecretFile(name) {
+  return /^\.env($|\.)/.test(name) && !/\.(example|sample|template)$/i.test(name);
+}
+
+function isExcluded(name, exclude) {
+  return exclude.has(name) || isSecretFile(name);
+}
 
 const SUCCESS_STATUSES = new Set(['LIVE', 'DEPLOYED']);
 const FAILURE_STATUSES = new Set(['FAILED', 'CANCELLED', 'SKIPPED']);
@@ -101,10 +111,9 @@ function resolveHosts(region) {
 function loadConfig() {
   const region = env('CONTENTSTACK_REGION').toUpperCase();
   const usingHostOverrides = Boolean(env('CONTENTSTACK_AUTH_HOST') || env('CONTENTSTACK_LAUNCH_API_HOST'));
-  const include = (env('LAUNCH_INCLUDE') || DEFAULT_INCLUDE.join(','))
-    .split(',')
-    .map(entry => entry.trim())
-    .filter(Boolean);
+  const list = value => value.split(',').map(entry => entry.trim()).filter(Boolean);
+  const include = env('LAUNCH_INCLUDE') ? list(env('LAUNCH_INCLUDE')) : null;
+  const exclude = new Set([...DEFAULT_EXCLUDE, ...list(env('LAUNCH_EXCLUDE'))]);
 
   const config = {
     clientId: env('CONTENTSTACK_CLIENT_ID'),
@@ -113,6 +122,7 @@ function loadConfig() {
     projectUid: env('PROJECT_UID'),
     environmentUid: env('ENVIRONMENT_UID'),
     include,
+    exclude,
     waitForDeployment: env('WAIT_FOR_DEPLOYMENT').toLowerCase() !== 'false',
     timeoutMs: (Number(env('DEPLOYMENT_TIMEOUT_SECONDS')) || 900) * 1000,
   };
@@ -327,13 +337,16 @@ function uploadZip(signed, zipPath) {
   });
 }
 
-function addDirectory(archive, dirPath, archivePath, stats) {
+function addDirectory(archive, dirPath, archivePath, stats, exclude) {
   for (const entry of fs.readdirSync(dirPath)) {
-    if (NEVER_INCLUDE.has(entry)) continue;
+    if (isExcluded(entry, exclude)) {
+      stats.excluded.add(entry);
+      continue;
+    }
     const fullPath = path.join(dirPath, entry);
     const entryArchivePath = path.posix.join(archivePath, entry);
     if (fs.statSync(fullPath).isDirectory()) {
-      addDirectory(archive, fullPath, entryArchivePath, stats);
+      addDirectory(archive, fullPath, entryArchivePath, stats, exclude);
     } else {
       archive.file(fullPath, { name: entryArchivePath });
       stats.files += 1;
@@ -365,30 +378,43 @@ function createZip(config) {
     const archiver = loadArchiver();
     const output = fs.createWriteStream(ZIP_PATH);
     const archive = archiver('zip', { zlib: { level: 9 } });
-    const stats = { files: 0, skipped: [] };
+    const stats = { files: 0, missing: [], excluded: new Set() };
 
     output.on('close', () => resolve(stats));
     archive.on('error', reject);
     archive.pipe(output);
 
-    for (const entry of config.include) {
-      if (NEVER_INCLUDE.has(entry)) continue;
-      const fullPath = path.join(process.cwd(), entry);
-      if (!fs.existsSync(fullPath)) {
-        stats.skipped.push(entry);
-        continue;
+    if (config.include) {
+      // Explicit allowlist: only these top-level entries, in this order. A file
+      // named here is trusted, so the .env guard is not applied to it -- it
+      // still applies to everything found inside a named directory.
+      for (const entry of config.include) {
+        if (config.exclude.has(entry)) {
+          stats.excluded.add(entry);
+          continue;
+        }
+        const fullPath = path.join(process.cwd(), entry);
+        if (!fs.existsSync(fullPath)) {
+          stats.missing.push(entry);
+          continue;
+        }
+        if (fs.statSync(fullPath).isDirectory()) {
+          addDirectory(archive, fullPath, entry, stats, config.exclude);
+        } else {
+          archive.file(fullPath, { name: entry });
+          stats.files += 1;
+        }
       }
-      if (fs.statSync(fullPath).isDirectory()) {
-        addDirectory(archive, fullPath, entry, stats);
-      } else {
-        archive.file(fullPath, { name: entry });
-        stats.files += 1;
-      }
+    } else {
+      // Default: everything in the working directory that is not excluded.
+      addDirectory(archive, process.cwd(), '', stats, config.exclude);
     }
 
     if (stats.files === 0) {
       archive.abort();
-      reject(new Error(`nothing to upload -- none of [${config.include.join(', ')}] exist in ${process.cwd()}`));
+      reject(new Error(config.include
+        ? `nothing to upload -- none of [${config.include.join(', ')}] exist in ${process.cwd()}`
+        : `nothing to upload -- everything in ${process.cwd()} is excluded`));
       return;
     }
 
@@ -447,9 +473,15 @@ async function main() {
     console.log('2/5 Zipping the project...');
     const stats = await createZip(config);
     const sizeMb = (fs.statSync(ZIP_PATH).size / (1024 * 1024)).toFixed(2);
-    console.log(`     ${stats.files} file(s), ${sizeMb} MB`);
-    if (stats.skipped.length) {
-      console.log(`     not present, skipped: ${stats.skipped.join(', ')}`);
+    console.log(`     ${stats.files} file(s), ${sizeMb} MB${config.include ? '' : ' (whole working directory)'}`);
+    if (stats.missing.length) {
+      console.log(`     not present, skipped: ${stats.missing.join(', ')}`);
+    }
+    if (stats.excluded.size) {
+      console.log(`     excluded: ${[...stats.excluded].sort().join(', ')}`);
+    }
+    if (!fs.existsSync(path.join(process.cwd(), 'package.json'))) {
+      console.log('     note: no package.json in the upload -- Launch may have nothing to build');
     }
 
     console.log('3/5 Requesting a signed upload URL...');

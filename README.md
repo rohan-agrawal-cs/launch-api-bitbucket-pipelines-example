@@ -31,8 +31,8 @@ and [`launch-api-gitlab-ci-example`](https://github.com/contentstack-launch-exam
 | `PROJECT_UID` | Launch project UID |
 | `ENVIRONMENT_UID` | Launch environment UID to redeploy |
 
-Optional: `LAUNCH_INCLUDE`, `WAIT_FOR_DEPLOYMENT`, `DEPLOYMENT_TIMEOUT_SECONDS` — see
-[`.env.example`](.env.example).
+Optional: `LAUNCH_EXCLUDE`, `LAUNCH_INCLUDE`, `WAIT_FOR_DEPLOYMENT`, `DEPLOYMENT_TIMEOUT_SECONDS`
+— see [`.env.example`](.env.example).
 
 To target a stack the region list does not cover, set `CONTENTSTACK_AUTH_HOST` and
 `CONTENTSTACK_LAUNCH_API_HOST` (hostnames, or full URLs — they are trimmed) instead of
@@ -110,18 +110,33 @@ instead of repository variables for `ENVIRONMENT_UID`: add `deployment: staging`
 
 ## What goes into the deployment zip
 
-Launch builds the upload, so the zip contains **source, not build output**, and `node_modules`,
-`.git`, and `.next` are always excluded.
+**By default the whole working directory is uploaded**, so any project layout works without
+configuration. Launch runs the build itself, so what it receives is source.
 
-Default contents: `package.json`, `package-lock.json`, `next.config.js`, `pages`, `public`, `app`,
-`functions`.
+These are always excluded, at every directory level:
 
-Anything in that list which does not exist is skipped and logged. To change the list, set
-`LAUNCH_INCLUDE` as a repository variable rather than editing the script:
+| Excluded | Why |
+|---|---|
+| `.git`, `.svn`, `.hg` | VCS metadata |
+| `node_modules` | Launch installs dependencies during the build |
+| `.next`, `.nuxt`, `.svelte-kit`, `.output`, `.turbo`, `.cache`, `coverage` | Build caches and reports |
+| `.DS_Store`, `Thumbs.db` | OS noise |
+| `.env`, `.env.local`, `.env.*` | Secrets. Launch takes its variables from the environment config. `.env.example` / `.sample` / `.template` are kept |
+| `deployment.zip` | The archive being written |
+
+`dist`, `build`, and `out` are **not** excluded, because a project may legitimately deploy committed
+output. Every run logs exactly what it excluded.
+
+Two repository variables adjust this without touching the script:
 
 ```
-LAUNCH_INCLUDE=package.json,package-lock.json,src,public,launch.json
+LAUNCH_EXCLUDE=fixtures,docs        # skip more, matched on name at any depth
+LAUNCH_INCLUDE=package.json,src     # upload only these top-level entries instead
 ```
+
+`LAUNCH_INCLUDE` switches from "scan the directory" to an explicit allowlist, in the order given;
+entries that don't exist are skipped and logged. A file named there directly is trusted, so the
+`.env` guard doesn't apply to it — the guard still applies inside any directory it names.
 
 ---
 
@@ -133,7 +148,8 @@ LAUNCH_INCLUDE=package.json,package-lock.json,src,public,launch.json
 | `HTTP 403` on the signed-URL call | The app is not installed in the organization that owns the project |
 | `HTTP 404` on the signed-URL or deployments call | Wrong `PROJECT_UID` / `ENVIRONMENT_UID`, or wrong `CONTENTSTACK_REGION` |
 | `received an XML error body -- check CONTENTSTACK_REGION` | The region host does not match the project's region |
-| `nothing to upload` | `LAUNCH_INCLUDE` does not match this repository's layout |
+| `nothing to upload` | Everything in the directory is excluded, or `LAUNCH_INCLUDE` matches nothing here |
+| `note: no package.json in the upload` | The zip has no Node project at its root, so Launch will likely have nothing to build |
 | `archiver 8.x is installed, which this script cannot use` | The install step dropped the `@^7` pin — `npm install archiver@^7` |
 | `PROJECT_UID` / `ENVIRONMENT_UID` print as `$PROJECT_UID` in the log | Normal: Bitbucket masks Secured variables by substituting the variable name. The real value is being used |
 | Deployment finishes `FAILED` | A build failure in Launch — open the deployment in the Launch UI for logs |
