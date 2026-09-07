@@ -1,0 +1,42 @@
+# Redeploys this repository to a Contentstack Launch environment on every push
+# to `main`, using the Launch Public API file-upload flow.
+#
+# One-time setup in Bitbucket:
+#   1. Repository settings -> Pipelines -> Settings -> Enable Pipelines
+#   2. Repository settings -> Repository variables -> add:
+#        CONTENTSTACK_CLIENT_ID       (Secured)
+#        CONTENTSTACK_CLIENT_SECRET   (Secured)
+#        CONTENTSTACK_REGION
+#        PROJECT_UID
+#        ENVIRONMENT_UID
+#
+# Repository variables are injected into the build as environment variables
+# automatically, so there is nothing to map into the step below.
+
+image: node:22
+
+clone:
+  depth: 1
+
+definitions:
+  steps:
+    - step: &redeploy-to-launch
+        name: Redeploy to Contentstack Launch
+        caches:
+          - node
+        script:
+          # Only the two dependencies deploy-api.js needs at runtime. The app's
+          # own dependencies are installed by Launch when it builds the upload.
+          - npm install --no-save --no-package-lock archiver form-data
+          - node deploy-api.js
+
+pipelines:
+  branches:
+    main:
+      - step: *redeploy-to-launch
+
+  # Lets you redeploy the current state of any branch on demand from
+  # Pipelines -> Run pipeline -> Custom: redeploy-to-launch
+  custom:
+    redeploy-to-launch:
+      - step: *redeploy-to-launch
