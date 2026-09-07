@@ -64,9 +64,13 @@ To target a stack the region list does not cover, set `CONTENTSTACK_AUTH_HOST` a
 - `pipelines.custom.redeploy-to-launch` — run any branch on demand from
   **Pipelines → Run pipeline → Custom: redeploy-to-launch**.
 
-The step installs only `archiver` and `form-data` (what `deploy-api.js` needs at runtime) and then
-runs `node deploy-api.js`. There is no build step: Launch builds the uploaded source itself, using
-the build command and output directory configured on the environment.
+The step installs only `archiver@^7` and `form-data@^4` (what `deploy-api.js` needs at runtime) and
+then runs `node deploy-api.js`. There is no build step: Launch builds the uploaded source itself,
+using the build command and output directory configured on the environment.
+
+Both majors are pinned deliberately. `archiver@8` is ESM-only and replaced the callable factory with
+classes, so an unpinned `npm install archiver` fails at the zip step — keep the `@^7`, especially
+when copying this step into a repo that does not pin archiver itself.
 
 To redeploy from a branch other than `main`, add it under `pipelines.branches`.
 
@@ -130,6 +134,8 @@ LAUNCH_INCLUDE=package.json,package-lock.json,src,public,launch.json
 | `HTTP 404` on the signed-URL or deployments call | Wrong `PROJECT_UID` / `ENVIRONMENT_UID`, or wrong `CONTENTSTACK_REGION` |
 | `received an XML error body -- check CONTENTSTACK_REGION` | The region host does not match the project's region |
 | `nothing to upload` | `LAUNCH_INCLUDE` does not match this repository's layout |
+| `archiver 8.x is installed, which this script cannot use` | The install step dropped the `@^7` pin — `npm install archiver@^7` |
+| `PROJECT_UID` / `ENVIRONMENT_UID` print as `$PROJECT_UID` in the log | Normal: Bitbucket masks Secured variables by substituting the variable name. The real value is being used |
 | Deployment finishes `FAILED` | A build failure in Launch — open the deployment in the Launch UI for logs |
 
 ---

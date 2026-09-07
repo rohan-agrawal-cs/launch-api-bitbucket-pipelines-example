@@ -27,7 +27,9 @@ definitions:
         script:
           # Only the two dependencies deploy-api.js needs at runtime. The app's
           # own dependencies are installed by Launch when it builds the upload.
-          - npm install --no-save --no-package-lock archiver form-data
+          # Both majors are pinned: archiver 8 is ESM-only with a different,
+          # class-based API that this script does not use.
+          - npm install --no-save --no-package-lock archiver@^7 form-data@^4
           - node deploy-api.js
 
 pipelines:

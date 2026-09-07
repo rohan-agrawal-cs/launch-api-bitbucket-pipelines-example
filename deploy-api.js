@@ -341,9 +341,28 @@ function addDirectory(archive, dirPath, archivePath, stats) {
   }
 }
 
+// archiver 7 exports the factory this script calls. archiver 8 is ESM-only and
+// exports classes instead, so require() hands back { Archiver, ZipArchive, ... }
+// and calling it would throw a bare "archiver is not a function".
+function loadArchiver() {
+  let archiver;
+  try {
+    archiver = require('archiver');
+  } catch (error) {
+    fail('archiver is not installed.', 'Run: npm install archiver@^7 form-data@^4');
+  }
+  if (typeof archiver !== 'function') {
+    fail(
+      `archiver ${archiver?.Archiver ? '8.x' : 'of an unsupported version'} is installed, which this script cannot use.`,
+      'Install archiver 7: npm install archiver@^7'
+    );
+  }
+  return archiver;
+}
+
 function createZip(config) {
   return new Promise((resolve, reject) => {
-    const archiver = require('archiver');
+    const archiver = loadArchiver();
     const output = fs.createWriteStream(ZIP_PATH);
     const archive = archiver('zip', { zlib: { level: 9 } });
     const stats = { files: 0, skipped: [] };
